@@ -1,0 +1,24 @@
+[
+  {
+    "id": "q1",
+    "mode": "improved",
+    "question": "How can I reset my student portal password?",
+    "answer": "Based on the available records, follow these steps:\n\n1. To reset your portal password, go to portal settings, click 'Forgot Password', then verify using your student email.\n\nIf your case is different, tell me your exact situation and I will refine the steps.",
+    "citations": [
+      "sample:faq:0"
+    ],
+    "specificity": 1,
+    "refusal_quality": 0,
+    "citation_count": 1
+  },
+  {
+    "id": "q2",
+    "mode": "improved",
+    "question": "Can I apply for late registration without evidence?",
+    "answer": "I do not have enough evidence in my knowledge base to answer that yet.",
+    "citations": [],
+    "specificity": 0,
+    "refusal_quality": 1,
+    "citation_count": 0
+  }
+]

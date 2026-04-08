@@ -350,7 +350,7 @@ Copy `.env.example` to `.env` and set:
 ### Ingest datasets
 ```bash
 python scripts/ingest_dataset.py --input data/raw --output data/processed
-python scripts/build_index.py --input data/processed
+python scripts/build_index.py
 ```
 
 ### Start CLI chatbot
@@ -367,12 +367,24 @@ python scripts/run_eval.py --suite data/eval/university_support_questions.json
 
 ## Configuration
 Common config options:
+- `LLM_BACKEND`: `auto`, `llama_cpp`, `ollama`, or `mock`
 - `LLM_MODEL_PATH`: path to local GGUF model
 - `LLM_CTX_SIZE`: context window (e.g., 4096)
+- `LLM_MAX_TOKENS`: max generated tokens per answer
+- `LLM_TEMPERATURE`: generation temperature
+- `OLLAMA_MODEL`: local Ollama model name (e.g., `llama3.1:8b`)
+- `OLLAMA_HOST`: local Ollama host URL
 - `TOP_K`: number of retrieved chunks (e.g., 5–10)
+- `MIN_RETRIEVAL_SCORE`: minimum similarity score for retrieved evidence
 - `CHUNK_SIZE`: tokens/characters per chunk
 - `INDEX_PATH`: FAISS index path
 - `SQLITE_PATH`: DB path
+
+### Local LLM backends
+- `LLM_BACKEND=auto`: tries local `llama.cpp` first, then local Ollama, then fallback formatter
+- `LLM_BACKEND=llama_cpp`: requires `llama-cpp-python` and a valid `LLM_MODEL_PATH`
+- `LLM_BACKEND=ollama`: requires a running local Ollama server
+- `LLM_BACKEND=mock`: deterministic fallback (no model inference)
 
 ---
 
