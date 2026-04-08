@@ -1,429 +1,403 @@
 # Offline University Support Chatbot (No External AI APIs)
-An MSc dissertation-ready project that builds a **self-contained, offline AI chatbot** that:
-- **Does not call ChatGPT/Gemini/any hosted LLM APIs**
-- Learns from **public “call record” transcripts** (already text) and **user chats**
-- Improves over time via a **continuous learning pipeline** (knowledge-base updates + optional fine-tuning)
-- Produces **grounded, non-generic answers** by retrieving relevant evidence from its own data (“brain”)
 
-> Dissertation theme: **Finding the limitations of chatbots** (generic responses, hallucinations, lack of domain grounding, memory failures) and quantifying improvements/limitations using an offline RAG + memory system.
+An offline MSc dissertation project that builds a university-support chatbot with:
+
+- no hosted AI APIs
+- retrieval-grounded answers with citations
+- continuous learning from local chats and transcript corpora
+- optional weekly LoRA weight updates with promotion gates
+
+The dissertation focus is to measure chatbot limitations (generic responses, weak refusal behavior, retrieval mistakes, and drift), then show what improves with offline RAG + memory + controlled model updates.
 
 ---
 
-## Table of Contents
-- [Key Idea](#key-idea)
-- [Non-goals / Constraints](#non-goals--constraints)
-- [System Architecture](#system-architecture)
-- [Data & “Call Records”](#data--call-records)
-- [Continuous Learning Definition](#continuous-learning-definition)
-- [Tech Stack](#tech-stack)
-- [Repository Structure](#repository-structure)
-- [Pipelines](#pipelines)
-  - [1) Ingestion Pipeline](#1-ingestion-pipeline)
-  - [2) Retrieval + Generation (Chat)](#2-retrieval--generation-chat)
-  - [3) Continuous Learning Loop](#3-continuous-learning-loop)
-  - [4) Optional Fine-tuning (LoRA)](#4-optional-fine-tuning-lora)
-- [Evaluation Plan (Dissertation)](#evaluation-plan-dissertation)
-- [Setup](#setup)
-- [Run](#run)
-- [Configuration](#configuration)
-- [Reproducibility](#reproducibility)
-- [Ethics & Privacy](#ethics--privacy)
-- [Limitations](#limitations)
+## Current Project Status
+
+What is implemented now:
+
+- offline retrieval + response generation
+- local storage and searchable memory in SQLite + FAISS
+- continuous memory ingestion from chat logs
+- synthetic transcript generation and HF transcript import
+- finetune dataset builder + local LoRA training
+- weekly weight-update workflow with promotion/rejection gate
+- evaluation scripts and saved result artifacts
+
+Important current caveat:
+
+- Full, heavy evaluation and live runs may be terminated in low-resource environments (exit code 143) when large model loading is attempted. This is an environment/resource issue, not a missing feature in the code.
+
+---
+
+## Table Of Contents
+
+- [What This Bot Is And Is Not](#what-this-bot-is-and-is-not)
+- [Architecture](#architecture)
+- [Repository Layout](#repository-layout)
+- [Quick Start](#quick-start)
+- [Data Ingestion And Indexing](#data-ingestion-and-indexing)
+- [Run The Bot](#run-the-bot)
+- [Continuous Learning Pipelines](#continuous-learning-pipelines)
+- [Evaluation](#evaluation)
+- [Backends And Config](#backends-and-config)
+- [Artifacts And State Files](#artifacts-and-state-files)
+- [Troubleshooting](#troubleshooting)
+- [Dissertation Notes](#dissertation-notes)
 - [Roadmap](#roadmap)
 
 ---
 
-## Key Idea
-Most chatbots answer **generically** because they lack **domain-specific knowledge** and cannot reliably ground answers in evidence.
+## What This Bot Is And Is Not
 
-This project implements an **offline “mini-LLM system”**:
+### Included
 
-**Local LLM** + **Knowledge Base (public transcripts + chats)** + **Retriever** + **Memory**  
-→ grounded answers with citations  
-→ “learning” via continuously updated knowledge base  
-→ optional periodic fine-tuning for weight updates
+- Offline local operation with no OpenAI/Gemini/Anthropic API calls
+- Grounded answers from retrieved evidence
+- Citation output for non-refusal answers
+- Weekly memory update pipeline
+- Weekly optional weight update (LoRA) pipeline
 
----
+### Not Included
 
-## Non-goals / Constraints
-- ❌ No OpenAI / Gemini / Anthropic APIs
-- ❌ No cloud-hosted inference endpoints (the model runs locally on your machine)
-- ✅ Public datasets only (no real private call recordings)
-- ✅ “Call records” are represented by **public call-style transcript datasets** (already in text form)
-- ✅ Final deliverable must include a working chatbot app (CLI or web)
-
-> Note: Development in GitHub Codespaces is fine for coding, but GPU-heavy training may need a local GPU machine.
+- Real private call recordings (public transcript data is used instead)
+- Guaranteed real-time training after each single chat turn
+- Cloud-hosted inference
 
 ---
 
-## System Architecture
+## Architecture
 
-### High-level
 ```text
-                ┌───────────────────────────────────────────┐
-                │         Public Transcript Datasets          │
-                └───────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌────────────────────────────────────────────────────────────────┐
-│                     Ingestion + Preprocessing                    │
-│  - clean text                                                   │
-│  - split into chunks                                            │
-│  - add metadata (dataset id, conversation id, turn index, etc.)  │
-└────────────────────────────────────────────────────────────────┘
-                                   │
-                     embeddings    │
-                (local model)      ▼
-                          ┌─────────────────────────┐
-                          │   Vector Index (FAISS)  │
-                          └─────────────────────────┘
-                                   ▲
-                                   │
-                          ┌─────────────────────────┐
-                          │ SQLite (metadata + logs)│
-                          └─────────────────────────┘
-                                   ▲
-                                   │
-┌────────────────────────────────────────────────────────────────┐
-│                           Chat Application                       │
-│  User message → Retrieve relevant chunks → Build prompt → LLM     │
-│  Response + citations → Save chat → Add to KB (continuous update) │
-└────────────────────────────────────────────────────────────────┘
+Public transcript JSONL + chat logs
+            -> preprocess + chunk
+            -> store chunks in SQLite
+            -> embed chunks
+            -> save vectors in FAISS
+
+User question
+            -> retrieve relevant chunks
+            -> grounded prompt
+            -> local backend generation
+            -> answer + citations
+            -> log chat to SQLite
+            -> optional high-signal write-back chunk
 ```
 
-### Components
-1. **Local LLM (Generator)**  
-   Generates the final response. Runs offline on CPU/GPU.
+Core modules:
 
-2. **Embedding Model**  
-   Turns chunks of text into vectors for similarity search.
-
-3. **Vector Index (FAISS)**  
-   Fast retrieval of relevant chunks.
-
-4. **SQLite “Brain Store”**  
-   Stores:
-   - documents and chunks metadata
-   - chat logs (user + assistant turns)
-   - ingestion runs + evaluation runs
-
-5. **Continuous Learning Loop**
-   - Chat logs are periodically re-ingested as additional knowledge
-   - Index gets updated, enabling improved future answers
+- ingestion: normalization, cleaning, chunking
+- retrieval: semantic + lexical memory support
+- generation: backend routing with strict/fallback behavior
+- learning: weekly memory and weekly weight update scripts
+- evaluation: baseline vs improved scoring
 
 ---
 
-## Data & “Call Records”
-Because real call recordings are unavailable, this project uses **public conversation transcript datasets** as a stand-in for “call records”.
+## Repository Layout
 
-### Data requirements
-Each dataset should provide:
-- conversational turns (`speaker`, `text`)
-- conversation/session id
-- domain or intent labels (optional)
-
-### Example dataset categories (choose 1–2)
-- customer-support / helpdesk dialogue corpora
-- spoken dialogue system corpora (transcribed)
-- task-oriented dialogue corpora (booking, admin tasks, troubleshooting)
-
-> The dissertation should explicitly state: “call records are simulated using public corpora.”
-
----
-
-## Continuous Learning Definition
-“Continuous learning” can mean two different things:
-
-### Level 1 (Required): Continuous Knowledge Learning (RAG)
-- Every new chat is saved.
-- Useful information is extracted and indexed.
-- Future responses improve because the retriever finds newly-added evidence.
-
-✅ Works with limited compute  
-✅ Safe + explainable (citations)  
-✅ Easy to evaluate over time
-
-### Level 2 (Optional): Periodic Weight Updates (LoRA)
-- After N chats or weekly, run LoRA fine-tuning on curated Q/A pairs.
-- Evaluate before/after on a fixed test set.
-
-✅ Demonstrates “model updates”  
-⚠ Requires careful filtering to avoid degradation
-
----
-
-## Tech Stack
-**Language:** Python 3.11+
-
-**Local LLM runtime (pick one):**
-- `llama.cpp` (recommended for portability)
-- or Ollama (local service; still offline)
-
-**Embeddings:**
-- `sentence-transformers` (local CPU)
-- optional GPU acceleration on RTX 4060
-
-**Vector store:**
-- FAISS (local index)
-
-**DB:**
-- SQLite (simple, reproducible)
-
-**App UI:**
-- CLI (fastest)
-- or FastAPI + minimal web UI
-
----
-
-## Repository Structure
 ```text
-.
-├── apps/
-│   ├── cli_chat.py
-│   └── web/                      # optional FastAPI app
-├── data/
-│   ├── raw/                      # downloaded public datasets (not committed)
-│   ├── processed/                # cleaned + normalized JSONL (not committed)
-│   └── eval/                     # evaluation question sets (committed)
-├── docs/
-│   ├── architecture.md
-│   ├── dissertation-metrics.md
-│   └── dataset-cards.md
-├── src/
-│   ├── config.py
-│   ├── db/
-│   │   ├── schema.sql
-│   │   └── sqlite.py
-│   ├── ingestion/
-│   │   ├── loaders.py
-│   │   ├── preprocess.py
-│   │   └── chunking.py
-│   ├── embedding/
-│   │   └── embedder.py
-│   ├── index/
-│   │   ├── faiss_index.py
-│   │   └── retrieval.py
-│   ├── llm/
-│   │   ├── prompt.py
-│   │   └── generator.py
-│   ├── memory/
-│   │   ├── short_term.py
-│   │   └── long_term.py
-│   ├── learning/
-│   │   ├── chatlog_to_kb.py
-│   │   └── filters.py
-│   └── evaluation/
-│       ├── metrics.py
-│       └── runner.py
-├── scripts/
-│   ├── ingest_dataset.py
-│   ├── build_index.py
-│   ├── run_eval.py
-│   └── export_chatlogs.py
-├── .env.example
-├── requirements.txt
-└── README.md
+apps/
+   cli_chat.py
+data/
+   raw/
+   processed/
+   index/
+   eval/
+docs/
+   transcript-datasets.md
+models/
+   adapters/
+scripts/
+   ingest_dataset.py
+   build_index.py
+   run_eval.py
+   export_chatlogs.py
+   generate_synthetic_transcripts.py
+   import_hf_transcripts.py
+   weekly_memory_update.py
+   build_finetune_dataset.py
+   train_lora.py
+   weekly_weight_update.py
+   run_full_weekly_pipeline.py
+src/
+   config.py
+   db/
+   embedding/
+   index/
+   learning/
+   llm/
+   evaluation/
 ```
 
 ---
 
-## Pipelines
+## Quick Start
 
-### 1) Ingestion Pipeline
-**Goal:** Convert transcripts into clean, searchable knowledge chunks.
+### 1) Create and activate venv
 
-Steps:
-1. Load dataset → normalize to JSONL:
-   ```json
-   {"doc_id":"...", "conv_id":"...", "turn_id":12, "speaker":"agent", "text":"..."}
-   ```
-2. Clean:
-   - remove timestamps/noise markers
-   - normalize whitespace
-   - drop extremely short/empty turns
-3. Chunk:
-   - join turns into windows (e.g., 6–12 turns) or chunk by token length
-4. Embed chunks (local embedding model)
-5. Store:
-   - SQLite: chunk metadata + text
-   - FAISS: vectors keyed by `chunk_id`
-
-### 2) Retrieval + Generation (Chat)
-**Goal:** Ground the LLM response using retrieved evidence.
-
-Steps:
-1. User message → embed query
-2. FAISS search → top-k chunks
-3. Build prompt:
-   - system rules:
-     - answer using only provided evidence when possible
-     - if evidence is missing: say “I don’t know”
-     - provide citations to chunk ids
-4. LLM generates answer
-5. Return:
-   - response text
-   - citations: `[chunk_123, chunk_981]`
-6. Save conversation to SQLite
-
-### 3) Continuous Learning Loop
-**Goal:** The chatbot improves as it chats.
-
-After each session (or nightly job):
-1. Export new chat logs
-2. Filter:
-   - remove low-quality turns (empty, abusive, purely social)
-   - keep high-signal Q/A pairs and factual statements
-3. Transform to KB chunks
-4. Embed + index them
-5. Now future retrieval includes user-derived knowledge
-
-> This mimics “learning from user chats” without risky always-on fine-tuning.
-
-### 4) Optional Fine-tuning (LoRA)
-**Goal:** Show weight-updating learning (optional).
-
-Workflow:
-1. Curate a training set from chat logs + transcripts
-2. Run LoRA fine-tuning on a small open model using RTX 4060
-3. Evaluate on fixed test set (before/after)
-4. If quality drops, revert and report findings (important limitation!)
-
----
-
-## Evaluation Plan (Dissertation)
-Design an evaluation that measures “generic vs specific” and “hallucination vs grounded”.
-
-### Baselines
-- **Baseline A:** LLM only (no retrieval)
-- **Baseline B:** LLM + retrieval (RAG)
-- **System C:** RAG + long-term memory (chatlog ingestion)
-
-### Example metrics
-1. **Specificity score (rubric-based)**
-   - 0: generic advice
-   - 1: partially specific, vague steps
-   - 2: concrete steps grounded in evidence + citations
-
-2. **Hallucination rate**
-   - % of answers that contain claims not supported by retrieved evidence
-
-3. **Answer correctness**
-   - human annotation on a test set (20–100 questions)
-
-4. **“I don’t know” quality**
-   - does the bot refuse when evidence is absent?
-
-5. **Latency**
-   - compare MacBook Air vs RTX 4060 machine
-
-### Suggested experiments
-- Evaluate with the same question set:
-  - before any chat learning
-  - after ingesting 50/100/200 chats
-- Evaluate what happens when transcripts contain conflicting info
-
----
-
-## Setup
-
-### 1) Create venv
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
 
 ### 2) Install dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 3) Configure environment
-Copy `.env.example` to `.env` and set:
-- paths to your local LLM model
-- embedding model name
-- data directories
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your preferred backend and model paths.
 
 ---
 
-## Run
+## Data Ingestion And Indexing
 
-### Ingest datasets
+### Minimal local dataset flow
+
+1. Place transcript JSONL files in `data/raw/`
+2. Run ingestion
+3. Build vector index
+
 ```bash
 python scripts/ingest_dataset.py --input data/raw --output data/processed
 python scripts/build_index.py
 ```
 
-### Start CLI chatbot
+Note: `scripts/build_index.py` has no CLI args and always rebuilds from DB chunks.
+
+### Generate synthetic transcripts (large offline corpus)
+
+```bash
+python scripts/generate_synthetic_transcripts.py --conversations 3000
+python scripts/ingest_dataset.py --input data/raw --output data/processed
+python scripts/build_index.py
+```
+
+### Import public transcripts from Hugging Face
+
+```bash
+python scripts/import_hf_transcripts.py --dataset daily_dialog --split train --limit 2000 --output data/raw/hf_daily_dialog_train.jsonl
+python scripts/ingest_dataset.py --input data/raw --output data/processed
+python scripts/build_index.py
+```
+
+---
+
+## Run The Bot
+
 ```bash
 python apps/cli_chat.py
 ```
 
-### Run evaluation
+The CLI supports:
+
+- greeting/thanks social handling
+- retrieval-grounded answers
+- refusal when evidence is insufficient
+- chat logging
+- high-signal continuous memory write-back
+
+---
+
+## Continuous Learning Pipelines
+
+### 1) Weekly memory update (knowledge-level learning)
+
 ```bash
-python scripts/run_eval.py --suite data/eval/university_support_questions.json
+python scripts/weekly_memory_update.py --min-new-chats 1
+```
+
+This script:
+
+- reads new chat rows from SQLite
+- filters high-signal assistant turns
+- upserts memory chunks
+- rebuilds FAISS index
+- updates state in `data/processed/weekly_memory_state.json`
+
+### 2) Build finetune dataset
+
+```bash
+python scripts/build_finetune_dataset.py --transcript-jsonl data/raw/synthetic_university_calls.jsonl --output-dir data/processed/finetune --max-transcript-samples 4000
+```
+
+### 3) Train LoRA adapter
+
+```bash
+python scripts/train_lora.py --train-path data/processed/finetune/train.jsonl --val-path data/processed/finetune/val.jsonl
+```
+
+### 4) Weekly weight update (model-level learning)
+
+```bash
+python scripts/weekly_weight_update.py --min-new-chats 20
+```
+
+This workflow:
+
+- checks minimum new chats
+- builds finetune data
+- trains a candidate LoRA adapter
+- evaluates candidate
+- promotes or rejects candidate based on configured gates
+- updates state in `data/processed/weekly_weight_state.json`
+
+### 5) Run both weekly jobs together
+
+```bash
+python scripts/run_full_weekly_pipeline.py --min-new-chats-memory 1 --min-new-chats-weight 20
 ```
 
 ---
 
-## Configuration
-Common config options:
-- `LLM_BACKEND`: `auto`, `llama_cpp`, `ollama`, or `mock`
-- `LLM_MODEL_PATH`: path to local GGUF model
-- `LLM_CTX_SIZE`: context window (e.g., 4096)
-- `LLM_MAX_TOKENS`: max generated tokens per answer
-- `LLM_TEMPERATURE`: generation temperature
-- `OLLAMA_MODEL`: local Ollama model name (e.g., `llama3.1:8b`)
-- `OLLAMA_HOST`: local Ollama host URL
-- `TOP_K`: number of retrieved chunks (e.g., 5–10)
-- `MIN_RETRIEVAL_SCORE`: minimum similarity score for retrieved evidence
-- `CHUNK_SIZE`: tokens/characters per chunk
-- `INDEX_PATH`: FAISS index path
-- `SQLITE_PATH`: DB path
+## Evaluation
 
-### Local LLM backends
-- `LLM_BACKEND=auto`: tries local `llama.cpp` first, then local Ollama, then fallback formatter
-- `LLM_BACKEND=llama_cpp`: requires `llama-cpp-python` and a valid `LLM_MODEL_PATH`
-- `LLM_BACKEND=ollama`: requires a running local Ollama server
-- `LLM_BACKEND=mock`: deterministic fallback (no model inference)
+Run full evaluation (baseline and improved):
 
----
+```bash
+python scripts/run_eval.py --suite data/eval/university_support_questions.json
+```
 
-## Reproducibility
-- All datasets must be referenced with:
-  - name, version, source link (in `docs/dataset-cards.md`)
-  - license
-- Fix random seeds where possible.
-- Save:
-  - ingestion run parameters
-  - model versions
-  - evaluation results in timestamped files (CSV/JSON)
+Output files are written under `data/eval/results/`:
+
+- `eval_baseline_*.json`
+- `eval_improved_*.json`
+- `eval_summary_*.csv`
+
+Metric columns:
+
+- `avg_specificity`
+- `avg_refusal_quality`
+- `avg_citation_count`
+
+Run single-mode summary helper:
+
+```bash
+python scripts/eval_backend_summary.py --suite data/eval/university_support_questions.json --mode improved
+```
 
 ---
 
-## Ethics & Privacy
-- Use only public datasets with clear licenses.
-- If collecting user chats during testing, add a consent notice:
-  - what is stored
-  - how it is used (learning/indexing)
-  - how to delete it
+## Backends And Config
+
+Main config is in `src/config.py`, with values loaded from `.env`.
+
+### Backend selection
+
+- `LLM_BACKEND=auto`:
+   tries `llama_cpp`, then `ollama`, then `hf_local`, then fallback formatter
+- `LLM_BACKEND=llama_cpp`:
+   requires `llama-cpp-python` and a valid local GGUF path
+- `LLM_BACKEND=ollama`:
+   requires running local Ollama service
+- `LLM_BACKEND=hf_local`:
+   uses HuggingFace model (and optional active adapter)
+- `LLM_BACKEND=mock`:
+   skips heavy generation and uses deterministic fallback behavior
+
+### Strict backend behavior
+
+- `LLM_STRICT_BACKEND=true` forces an explicit backend-unavailable message.
+- `LLM_STRICT_BACKEND=false` allows fallback behavior.
+
+### Important variables
+
+- `LLM_MODEL_PATH`
+- `HF_BASE_MODEL`
+- `HF_ACTIVE_ADAPTER_PATH`
+- `WEIGHT_UPDATE_STATE_PATH`
+- `WEIGHT_EVAL_SUITE_PATH`
+- `WEIGHT_GATE_MIN_SPECIFICITY`
+- `WEIGHT_GATE_MIN_REFUSAL_QUALITY`
+- `WEIGHT_GATE_MIN_CITATION_COUNT`
+- `WEIGHT_GATE_MAX_EVAL_LOSS_INCREASE`
+- `TOP_K`
+- `MIN_RETRIEVAL_SCORE`
 
 ---
 
-## Limitations
-This system is designed to highlight real chatbot limitations:
-- Domain mismatch → generic outputs
-- Retrieval failure → wrong grounding
-- Conflicting evidence → inconsistent answers
-- Continuous ingestion can reinforce mistakes if filtering is weak
-- Fine-tuning on noisy chat logs can cause catastrophic forgetting
+## Artifacts And State Files
+
+Key operational files:
+
+- `data/chatbot.db`: SQLite store for chat logs, chunks, run logs
+- `data/index/faiss.index`: vector index
+- `data/index/chunks.jsonl`: index metadata
+- `data/processed/weekly_memory_state.json`: memory update state
+- `data/processed/weekly_weight_state.json`: active adapter + promotion state
+- `models/adapters/*`: LoRA training outputs
+
+---
+
+## Troubleshooting
+
+### Process terminated (exit code 143)
+
+Symptoms:
+
+- evaluation or chat run exits with code 143
+
+Typical causes:
+
+- environment resource limits while loading larger models
+
+Actions:
+
+1. Use lighter backend for checks:
+
+```bash
+export LLM_BACKEND=mock
+python apps/cli_chat.py
+```
+
+2. Reduce heavy runs and test one script at a time.
+3. If using `hf_local`, use a smaller base model.
+4. Run training/eval on a higher-memory GPU machine when possible.
+
+### No chunks found
+
+Run:
+
+```bash
+python scripts/ingest_dataset.py --input data/raw --output data/processed
+python scripts/build_index.py
+```
+
+### Weekly jobs skip with low chat count
+
+This is expected when `--min-new-chats` is not met. Lower the threshold for testing.
+
+---
+
+## Dissertation Notes
+
+Use this wording for methodology clarity:
+
+- “Call records are represented by public transcript corpora in text form.”
+- “Continuous learning is implemented at two levels: memory-level KB updates and optional periodic weight-level LoRA updates.”
+- “Promotion gates prevent degraded adapters from becoming active.”
+
+Recommended experiment set:
+
+1. Baseline vs improved on fixed suite.
+2. Before/after weekly memory update comparison.
+3. Promotion/rejection examples from weekly weight update logs.
+4. Failure analysis on out-of-domain and ambiguous questions.
 
 ---
 
 ## Roadmap
-- [ ] MVP: Offline LLM + ingestion + FAISS retrieval + citations
-- [ ] Continuous learning: ingest chat logs into KB
-- [ ] Evaluation runner + metrics + plots
-- [ ] (Optional) LoRA fine-tuning experiment
-- [ ] Final report: architecture + experiments + limitations + discussion
+
+- [x] MVP: offline ingestion + retrieval + citations
+- [x] Continuous memory updates from chats
+- [x] Evaluation artifacts (JSON/CSV)
+- [x] LoRA training + weekly weight update orchestration
+- [ ] Final dissertation report package (figures/tables/analysis write-up)
 
 ---

@@ -109,3 +109,44 @@ class SQLiteStore:
                 """,
                 (source_path, input_rows, output_chunks, notes),
             )
+
+    def log_model_run(
+        self,
+        run_name: str,
+        base_model: str,
+        adapter_path: str,
+        train_rows: int,
+        val_rows: int,
+        train_loss: float | None,
+        eval_loss: float | None,
+        status: str,
+        notes: str = "",
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO model_runs (
+                    run_name,
+                    base_model,
+                    adapter_path,
+                    train_rows,
+                    val_rows,
+                    train_loss,
+                    eval_loss,
+                    status,
+                    notes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_name,
+                    base_model,
+                    adapter_path,
+                    train_rows,
+                    val_rows,
+                    train_loss,
+                    eval_loss,
+                    status,
+                    notes,
+                ),
+            )

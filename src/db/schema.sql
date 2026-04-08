@@ -26,3 +26,17 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
     notes TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS model_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_name TEXT NOT NULL,
+    base_model TEXT NOT NULL,
+    adapter_path TEXT,
+    train_rows INTEGER,
+    val_rows INTEGER,
+    train_loss REAL,
+    eval_loss REAL,
+    status TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
