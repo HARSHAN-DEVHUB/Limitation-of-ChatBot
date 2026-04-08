@@ -29,8 +29,30 @@ Important current caveat:
 
 ---
 
+## In Simple Words: What This Bot Has
+
+- It works offline.
+- It can run without paid cloud AI APIs.
+- It answers from stored knowledge, not random guessing.
+- It searches its own saved data first, then answers.
+- It can show where the answer came from.
+- It gives citations/references for the information it used.
+- It can refuse when data is missing.
+- If it does not find enough evidence, it says it does not know instead of inventing.
+- It saves chat history.
+- Conversations are stored locally for future learning.
+- It has self-learning pipelines.
+- It can use past chats and transcript/call-style records to update memory over time.
+- It has evaluation scripts.
+- You can compare baseline vs improved behavior such as specificity, refusal quality, and citation use.
+- It supports model improvement flow.
+- There is a local LoRA fine-tuning workflow for periodic model updates.
+
+---
+
 ## Table Of Contents
 
+- [In Simple Words: What This Bot Has](#in-simple-words-what-this-bot-has)
 - [What This Bot Is And Is Not](#what-this-bot-is-and-is-not)
 - [Architecture](#architecture)
 - [Repository Layout](#repository-layout)
